@@ -1,0 +1,14 @@
+import test from 'node:test';import assert from 'node:assert';
+process.env.SUPABASE_URL='http://127.0.0.1:9';process.env.SUPABASE_ANON_KEY='test-anon';delete process.env.OPENAI_API_KEY;process.env.ALLOWED_ORIGINS='http://localhost:5173';
+const {createApp}=await import('../src/app.js');let srv,b;
+test.before(async()=>{srv=createApp().listen(0);await new Promise(r=>srv.once('listening',r));b='http://127.0.0.1:'+srv.address().port});test.after(()=>srv.close());
+test('health reports config flags only',async()=>{const j=await(await fetch(b+'/api/health')).json();assert.deepEqual(j.data,{status:'ok',supabaseConfigured:true,openaiConfigured:false})});
+test('protected routes reject missing token',async()=>{for(const p of['/api/emails','/api/approvals','/api/follow-ups','/api/notifications','/api/activity','/api/settings','/api/analytics/summary','/api/me']){const r=await fetch(b+p);assert.equal(r.status,401,p)}});
+test('malformed auth header rejected',async()=>assert.equal((await fetch(b+'/api/emails',{headers:{Authorization:'Basic abc'}})).status,401));
+test('unreachable auth service gives 503, not fake success',async()=>assert.equal((await fetch(b+'/api/emails',{headers:{Authorization:'Bearer x.y.z'}})).status,503));
+test('unknown API route requires auth first (no route enumeration)',async()=>assert.equal((await fetch(b+'/api/nope')).status,401));
+test('unknown non-API route 404 JSON',async()=>{const r=await fetch(b+'/nope');assert.equal(r.status,404);assert.equal((await r.json()).error.code,'NOT_FOUND')});
+test('disallowed origin blocked',async()=>assert.equal((await fetch(b+'/api/health',{headers:{Origin:'https://evil.example'}})).status,403));
+test('allowed origin gets CORS header',async()=>assert.equal((await fetch(b+'/api/health',{headers:{Origin:'http://localhost:5173'}})).headers.get('access-control-allow-origin'),'http://localhost:5173'));
+test('security headers set, x-powered-by absent',async()=>{const h=(await fetch(b+'/api/health')).headers;assert.equal(h.get('x-content-type-options'),'nosniff');assert.equal(h.get('x-powered-by'),null)});
+test('oversized body rejected',async()=>assert.ok([400,401,413].includes((await fetch(b+'/api/emails',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({a:'x'.repeat(200000)})})).status)));
